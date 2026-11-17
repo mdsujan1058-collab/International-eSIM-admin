@@ -1,0 +1,474 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eSIM Admin Panel</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<style>
+body{font-family:Arial;background:#f1f4f8;padding:15px}
+.container{max-width:700px;margin:auto}
+.card{background:white;padding:18px;margin:15px 0;border-radius:10px}
+input,select{width:100%;box-sizing:border-box;padding:12px;margin:8px 0}
+button{padding:10px 14px;background:#1266cc;color:white;border:0;border-radius:5px;margin:5px;cursor:pointer}
+.delete{background:#d93025}
+.edit{background:#e69500}
+.package,.customer{border:1px solid #ddd;padding:12px;margin:10px 0;border-radius:8px}
+.permission{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:10px 0;padding:8px;background:#f5f7fb;border-radius:7px}
+.permission button{min-width:75px}
+.on{background:#16834a}
+.off{background:#d93025}
+.small{color:#64748b;font-size:13px}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<h1>International eSIM Admin</h1>
+<button onclick="logout()">Logout</button>
+
+<div class="card">
+<h2 id="heading">Add New Package</h2>
+
+<form id="packageForm">
+
+<label>Operator</label>
+<select id="operator" required>
+<option value="">Select Operator</option>
+<option>GP</option>
+<option>Robi</option>
+<option>Airtel</option>
+<option>Banglalink</option>
+</select>
+
+<label>Package Name</label>
+<input id="name" placeholder="Package Name" required>
+
+<label>Price</label>
+<input id="price" type="number" min="0" step="0.01" placeholder="Price" required>
+
+<label>Data</label>
+<input id="data" placeholder="Example: 10GB" required>
+
+<label>Validity</label>
+<input id="validity" placeholder="Example: 30 Days" required>
+
+<button type="submit" id="save">Add Package</button>
+<button type="button" id="cancel" onclick="cancelEdit()" hidden>Cancel</button>
+
+</form>
+
+<p id="message"></p>
+</div>
+
+<div class="card">
+<h2>All Packages</h2>
+<div id="packages">Loading...</div>
+</div>
+
+<div class="card">
+<h2>Customer Management</h2>
+
+<input type="text" id="customerSearch"
+placeholder="Search by name or mobile number">
+
+<p id="customerMessage" class="small">Loading customers...</p>
+
+<div id="customers"></div>
+</div>
+
+</div>
+
+<script>
+const firebaseConfig = {
+apiKey:"AIzaSyARl16kTrSueEzj_CGdL2jlmg2k6_bXvUs",
+authDomain:"international-esim.firebaseapp.com",
+projectId:"international-esim",
+storageBucket:"international-esim.firebasestorage.app",
+messagingSenderId:"436978177904",
+appId:"1:436978177904:web:7f4bf60b14dad96e0321b5",
+measurementId:"G-9LL2FJL671"
+};
+
+firebase.initializeApp(firebaseConfig);
+
+const auth = firebase.auth();
+const db = firebase.firestore();
+const adminEmail = "mdsujan1058@gmail.com";
+
+let editId = null;
+let stopPackages = null;
+let stopCustomers = null;
+let customerList = [];
+
+function msg(t){
+document.getElementById("message").textContent = t;
+}
+
+// ADMIN LOGIN CHECK
+
+auth.onAuthStateChanged(async user => {
+
+if(!user){
+location.href = "admin.html";
+return;
+}
+
+if((user.email || "").toLowerCase() !== adminEmail.toLowerCase()){
+alert("Admin access denied");
+await auth.signOut();
+location.href = "admin.html";
+return;
+}
+
+loadPackages();
+loadCustomers();
+
+});
+
+// PACKAGE MANAGEMENT
+
+function loadPackages(){
+
+if(stopPackages) stopPackages();
+
+stopPackages = db.collection("packages").onSnapshot(snapshot => {
+
+const box = document.getElementById("packages");
+box.innerHTML = "";
+
+if(snapshot.empty){
+box.textContent = "No packages found.";
+return;
+}
+
+snapshot.forEach(doc => {
+
+const p = doc.data();
+const div = document.createElement("div");
+div.className = "package";
+
+const title = document.createElement("h3");
+title.textContent = (p.operator || "") + " - " + (p.name || "");
+
+const details = document.createElement("p");
+details.textContent =
+"Price: " + (p.price ?? "") +
+" | Data: " + (p.data || "") +
+" | Validity: " + (p.validity || "");
+
+const edit = document.createElement("button");
+edit.className = "edit";
+edit.textContent = "Edit";
+edit.onclick = () => editPackage(doc.id);
+
+const del = document.createElement("button");
+del.className = "delete";
+del.textContent = "Delete";
+del.onclick = () => deletePackage(doc.id);
+
+div.append(title, details, edit, del);
+box.appendChild(div);
+
+});
+
+}, error => {
+document.getElementById("packages").textContent =
+"Error: " + error.message;
+});
+
+}
+
+// ADD / UPDATE PACKAGE
+
+document.getElementById("packageForm").addEventListener("submit", async e => {
+
+e.preventDefault();
+
+const user = auth.currentUser;
+
+if(!user || (user.email || "").toLowerCase() !== adminEmail.toLowerCase()){
+msg("Admin access required");
+return;
+}
+
+const p = {
+operator: document.getElementById("operator").value,
+name: document.getElementById("name").value.trim(),
+price: Number(document.getElementById("price").value),
+data: document.getElementById("data").value.trim(),
+validity: document.getElementById("validity").value.trim(),
+updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+};
+
+if(!p.name || !p.operator || !p.data || !p.validity ||
+!Number.isFinite(p.price) || p.price < 0){
+
+msg("Please enter valid details");
+return;
+
+}
+
+try{
+
+if(editId){
+
+await db.collection("packages").doc(editId).update(p);
+msg("Package updated!");
+
+}else{
+
+p.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+
+await db.collection("packages").add(p);
+msg("Package added!");
+
+}
+
+cancelEdit();
+
+}catch(error){
+
+msg("Error: " + error.message);
+
+}
+
+});
+
+// EDIT PACKAGE
+
+async function editPackage(id){
+
+try{
+
+const doc = await db.collection("packages").doc(id).get();
+
+if(!doc.exists){
+msg("Package not found");
+return;
+}
+
+const p = doc.data();
+
+editId = id;
+
+document.getElementById("operator").value = p.operator || "";
+document.getElementById("name").value = p.name || "";
+document.getElementById("price").value = p.price ?? "";
+document.getElementById("data").value = p.data || "";
+document.getElementById("validity").value = p.validity || "";
+
+document.getElementById("heading").textContent = "Edit Package";
+document.getElementById("save").textContent = "Update Package";
+document.getElementById("cancel").hidden = false;
+
+window.scrollTo(0,0);
+
+}catch(error){
+
+msg("Error: " + error.message);
+
+}
+
+}
+
+// DELETE PACKAGE
+
+async function deletePackage(id){
+
+if(!confirm("Delete this package?")) return;
+
+try{
+
+await db.collection("packages").doc(id).delete();
+
+msg("Package deleted!");
+
+if(editId === id) cancelEdit();
+
+}catch(error){
+
+msg("Error: " + error.message);
+
+}
+
+}
+
+// CANCEL EDIT
+
+function cancelEdit(){
+
+editId = null;
+
+document.getElementById("packageForm").reset();
+document.getElementById("heading").textContent = "Add New Package";
+document.getElementById("save").textContent = "Add Package";
+document.getElementById("cancel").hidden = true;
+
+}
+
+// CUSTOMER MANAGEMENT
+
+function loadCustomers(){
+
+if(stopCustomers) stopCustomers();
+
+stopCustomers = db.collection("customers").onSnapshot(snapshot => {
+
+customerList = [];
+
+snapshot.forEach(doc => {
+
+customerList.push({
+id: doc.id,
+...doc.data()
+});
+
+});
+
+renderCustomers();
+
+document.getElementById("customerMessage").textContent =
+customerList.length + " customers found.";
+
+}, error => {
+
+document.getElementById("customerMessage").textContent =
+"Customer Error: " + error.message;
+
+});
+
+}
+
+// CUSTOMER SEARCH
+
+document.getElementById("customerSearch")
+.addEventListener("input", renderCustomers);
+
+function renderCustomers(){
+
+const box = document.getElementById("customers");
+box.innerHTML = "";
+
+const search = document.getElementById("customerSearch")
+.value.trim().toLowerCase();
+
+const filtered = customerList.filter(c =>
+(c.name || "").toLowerCase().includes(search) ||
+(c.phone || "").toLowerCase().includes(search)
+);
+
+if(filtered.length === 0){
+box.textContent = "No customers found.";
+return;
+}
+
+filtered.forEach(c => {
+
+const div = document.createElement("div");
+div.className = "customer";
+
+const title = document.createElement("h3");
+title.textContent = c.name || "No Name";
+
+const phone = document.createElement("p");
+phone.textContent = "Mobile: " + (c.phone || "Not available");
+
+div.append(title, phone);
+
+addPermission(div, c, "SIM", "simPermission");
+addPermission(div, c, "eSIM", "esimPermission");
+addPermission(div, c, "Roaming", "roamingPermission");
+addPermission(div, c, "Hotspot", "hotspotPermission");
+
+box.appendChild(div);
+
+});
+
+}
+
+// PERMISSION BUTTONS
+
+function addPermission(parent, customer, label, field){
+
+const row = document.createElement("div");
+row.className = "permission";
+
+const text = document.createElement("span");
+text.textContent = label + " Permission: " +
+(customer[field] === true ? "ON" : "OFF");
+
+const button = document.createElement("button");
+
+button.className = customer[field] === true ? "on" : "off";
+button.textContent = customer[field] === true ? "ON" : "OFF";
+
+button.onclick = () =>
+changePermission(customer.id, field, customer[field] === true);
+
+row.append(text, button);
+parent.appendChild(row);
+
+}
+
+// ADMIN PERMISSION UPDATE
+
+async function changePermission(id, field, currentValue){
+
+const user = auth.currentUser;
+
+if(!user || (user.email || "").toLowerCase() !== adminEmail.toLowerCase()){
+alert("Admin access required");
+return;
+}
+
+const activeFields = {
+simPermission: "simActive",
+esimPermission: "esimActive",
+roamingPermission: "roamingActive",
+hotspotPermission: "hotspotActive"
+};
+
+try{
+
+const updates = {};
+
+updates[field] = !currentValue;
+
+// Admin OFF করলে Customer Active Status-ও OFF হবে
+if(currentValue === true){
+updates[activeFields[field]] = false;
+}
+
+await db.collection("customers").doc(id).update(updates);
+
+}catch(error){
+
+alert("Permission Update Error: " + error.message);
+
+}
+
+}
+
+// LOGOUT
+
+async function logout(){
+
+if(stopPackages) stopPackages();
+if(stopCustomers) stopCustomers();
+
+await auth.signOut();
+
+location.href = "admin.html";
+
+}
+</script>
+
+</body>
+</html>
